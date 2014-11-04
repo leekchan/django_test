@@ -1,5 +1,6 @@
 from __future__ import unicode_literals
 
+from copy import deepcopy
 import datetime
 
 from django.core.exceptions import FieldError
@@ -209,7 +210,7 @@ class ExpressionsTests(TestCase):
         # keys, or attributes which involve joins.
         test_gmbh.point_of_contact = None
         test_gmbh.save()
-        self.assertTrue(test_gmbh.point_of_contact is None)
+        self.assertIsNone(test_gmbh.point_of_contact)
 
         def test():
             test_gmbh.point_of_contact = F("ceo")
@@ -270,7 +271,7 @@ class ExpressionsTests(TestCase):
         # Another similar case for F() than above. Now we have the same join
         # in two filter kwargs, one in the lhs lookup, one in F. Here pre
         # #18375 the amount of joins generated was random if dict
-        # randomization was enabled, that is the generated query dependend
+        # randomization was enabled, that is the generated query dependent
         # on which clause was seen first.
         qs = Employee.objects.filter(
             company_ceo_set__num_employees=F('pk'),
@@ -286,6 +287,14 @@ class ExpressionsTests(TestCase):
             company_ceo_set__num_employees=F('company_ceo_set__num_employees')
         )
         self.assertEqual(str(qs.query).count('JOIN'), 2)
+
+    def test_F_object_deepcopy(self):
+        """
+        Make sure F objects can be deepcopied (#23492)
+        """
+        f = F("foo")
+        g = deepcopy(f)
+        self.assertEqual(f.name, g.name)
 
 
 class ExpressionsNumericTests(TestCase):

@@ -110,6 +110,7 @@ class BaseModelAdmin(six.with_metaclass(forms.MediaDefiningClass)):
     readonly_fields = ()
     ordering = None
     view_on_site = True
+    show_full_result_count = True
 
     # Validation of ModelAdmin definitions
     # Old, deprecated style:
@@ -416,7 +417,10 @@ class BaseModelAdmin(six.with_metaclass(forms.MediaDefiningClass)):
                     # since it's ignored in ChangeList.get_filters().
                     return True
                 model = field.rel.to
-                rel_name = field.rel.get_related_field().name
+                if hasattr(field.rel, 'get_related_field'):
+                    rel_name = field.rel.get_related_field().name
+                else:
+                    rel_name = None
             elif isinstance(field, RelatedObject):
                 model = field.model
                 rel_name = model._meta.pk.name
@@ -449,6 +453,11 @@ class BaseModelAdmin(six.with_metaclass(forms.MediaDefiningClass)):
             field = opts.get_field(to_field)
         except FieldDoesNotExist:
             return False
+
+        # Check whether this model is the origin of a M2M relationship
+        # in which case to_field has to be the pk on this model.
+        if opts.many_to_many and field.primary_key:
+            return True
 
         # Make sure at least one of the models registered for this site
         # references this field through a FK or a M2M relationship.

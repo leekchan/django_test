@@ -1,12 +1,14 @@
 from __future__ import unicode_literals
 
 import re
+from tempfile import NamedTemporaryFile
 import unittest
 
 from django.db import connection
 from django.contrib.gis import gdal
 from django.contrib.gis.geos import HAS_GEOS
-from django.contrib.gis.tests.utils import oracle, postgis, spatialite
+from django.contrib.gis.tests.utils import no_oracle, oracle, postgis, spatialite
+from django.core.management import call_command
 from django.test import TestCase, skipUnlessDBFeature
 from django.utils import six
 
@@ -86,9 +88,9 @@ class GeoModelTest(TestCase):
 
         # Testing the `ogr` and `srs` lazy-geometry properties.
         if gdal.HAS_GDAL:
-            self.assertEqual(True, isinstance(ns.poly.ogr, gdal.OGRGeometry))
+            self.assertIsInstance(ns.poly.ogr, gdal.OGRGeometry)
             self.assertEqual(ns.poly.wkb, ns.poly.ogr.wkb)
-            self.assertEqual(True, isinstance(ns.poly.srs, gdal.SpatialReference))
+            self.assertIsInstance(ns.poly.srs, gdal.SpatialReference)
             self.assertEqual('WGS 84', ns.poly.srs.name)
 
         # Changing the interior ring on the poly attribute.
@@ -143,7 +145,7 @@ class GeoModelTest(TestCase):
 
         # If the GeometryField SRID is -1, then we shouldn't perform any
         # transformation if the SRID of the input geometry is different.
-        if spatialite and connection.ops.spatial_version < 3:
+        if spatialite and connection.ops.spatial_version < (3, 0, 0):
             # SpatiaLite < 3 does not support missing SRID values.
             return
         m1 = MinusOneSRID(geom=Point(17, 23, srid=4326))
@@ -165,16 +167,16 @@ class GeoModelTest(TestCase):
                                         Polygon(LinearRing((0, 0), (0, 5), (5, 5), (5, 0), (0, 0))))).save()
 
         f_1 = Feature.objects.get(name='Point')
-        self.assertEqual(True, isinstance(f_1.geom, Point))
+        self.assertIsInstance(f_1.geom, Point)
         self.assertEqual((1.0, 1.0), f_1.geom.tuple)
         f_2 = Feature.objects.get(name='LineString')
-        self.assertEqual(True, isinstance(f_2.geom, LineString))
+        self.assertIsInstance(f_2.geom, LineString)
         self.assertEqual(((0.0, 0.0), (1.0, 1.0), (5.0, 5.0)), f_2.geom.tuple)
 
         f_3 = Feature.objects.get(name='Polygon')
-        self.assertEqual(True, isinstance(f_3.geom, Polygon))
+        self.assertIsInstance(f_3.geom, Polygon)
         f_4 = Feature.objects.get(name='GeometryCollection')
-        self.assertEqual(True, isinstance(f_4.geom, GeometryCollection))
+        self.assertIsInstance(f_4.geom, GeometryCollection)
         self.assertEqual(f_3.geom, f_4.geom[2])
 
     @skipUnlessDBFeature("supports_transform")
@@ -196,10 +198,30 @@ class GeoModelTest(TestCase):
         cities1 = City.objects.all()
         # Only PostGIS would support a 'select *' query because of its recognized
         # HEXEWKB format for geometry fields
-        as_text = 'ST_AsText' if postgis else 'asText'
-        cities2 = City.objects.raw('select id, name, %s(point) from geoapp_city' % as_text)
+        as_text = 'ST_AsText(%s)' if postgis else connection.ops.select
+        cities2 = City.objects.raw(
+            'select id, name, %s from geoapp_city' % as_text % 'point'
+        )
         self.assertEqual(len(cities1), len(list(cities2)))
         self.assertIsInstance(cities2[0].point, Point)
+
+    def test_dumpdata_loaddata_cycle(self):
+        """
+        Test a dumpdata/loaddata cycle with geographic data.
+        """
+        out = six.StringIO()
+        original_data = list(City.objects.all().order_by('name'))
+        call_command('dumpdata', 'geoapp.City', stdout=out)
+        result = out.getvalue()
+        houston = City.objects.get(name='Houston')
+        self.assertIn('"point": "%s"' % houston.point.ewkt, result)
+
+        # Reload now dumped data
+        with NamedTemporaryFile(mode='w', suffix='.json') as tempfile:
+            tempfile.write(result)
+            tempfile.seek(0)
+            call_command('loaddata', tempfile.name, verbosity=0)
+        self.assertListEqual(original_data, list(City.objects.all().order_by('name')))
 
 
 @skipUnlessDBFeature("gis_enabled")
@@ -230,7 +252,7 @@ class GeoLookupTest(TestCase):
             self.assertEqual(3, qs.count())
             cities = ['Houston', 'Dallas', 'Oklahoma City']
             for c in qs:
-                self.assertEqual(True, c.name in cities)
+                self.assertIn(c.name, cities)
 
         # Pulling out some cities.
         houston = City.objects.get(name='Houston')
@@ -247,7 +269,7 @@ class GeoLookupTest(TestCase):
         self.assertEqual('New Zealand', nz.name)
 
         # Spatialite 2.3 thinks that Lawrence is in Puerto Rico (a NULL geometry).
-        if not (spatialite and connection.ops.spatial_version < 3):
+        if not (spatialite and connection.ops.spatial_version < (3, 0, 0)):
             ks = State.objects.get(poly__contains=lawrence.point)
             self.assertEqual('Kansas', ks.name)
 
@@ -283,14 +305,14 @@ class GeoLookupTest(TestCase):
         qs = City.objects.filter(point__right=co_border)
         self.assertEqual(6, len(qs))
         for c in qs:
-            self.assertEqual(True, c.name in cities)
+            self.assertIn(c.name, cities)
 
         # These cities should be strictly to the right of the KS border.
         cities = ['Chicago', 'Wellington']
         qs = City.objects.filter(point__right=ks_border)
         self.assertEqual(2, len(qs))
         for c in qs:
-            self.assertEqual(True, c.name in cities)
+            self.assertIn(c.name, cities)
 
         # Note: Wellington has an 'X' value of 174, so it will not be considered
         #  to the left of CO.
@@ -301,7 +323,7 @@ class GeoLookupTest(TestCase):
         qs = City.objects.filter(point__left=ks_border)
         self.assertEqual(2, len(qs))
         for c in qs:
-            self.assertEqual(True, c.name in cities)
+            self.assertIn(c.name, cities)
 
     # The left/right lookup tests are known failures on PostGIS 2.0/2.0.1
     # http://trac.osgeo.org/postgis/ticket/2035
@@ -334,8 +356,8 @@ class GeoLookupTest(TestCase):
         # The valid states should be Colorado & Kansas
         self.assertEqual(2, len(validqs))
         state_names = [s.name for s in validqs]
-        self.assertEqual(True, 'Colorado' in state_names)
-        self.assertEqual(True, 'Kansas' in state_names)
+        self.assertIn('Colorado', state_names)
+        self.assertIn('Kansas', state_names)
 
         # Saving another commonwealth w/a NULL geometry.
         nmi = State.objects.create(name='Northern Mariana Islands', poly=None)
@@ -345,7 +367,7 @@ class GeoLookupTest(TestCase):
         nmi.poly = 'POLYGON((0 0,1 0,1 1,1 0,0 0))'
         nmi.save()
         State.objects.filter(name='Northern Mariana Islands').update(poly=None)
-        self.assertEqual(None, State.objects.get(name='Northern Mariana Islands').poly)
+        self.assertIsNone(State.objects.get(name='Northern Mariana Islands').poly)
 
     @skipUnlessDBFeature("supports_relate_lookup")
     def test_relate_lookup(self):
@@ -408,7 +430,7 @@ class GeoQuerySetTest(TestCase):
         else:
             tol = 0.000000001
         for s in qs:
-            self.assertEqual(True, s.poly.centroid.equals_exact(s.centroid, tol))
+            self.assertTrue(s.poly.centroid.equals_exact(s.centroid, tol))
 
     @skipUnlessDBFeature(
         "has_difference_method", "has_intersection_method",
@@ -605,7 +627,9 @@ class GeoQuerySetTest(TestCase):
             '-95.23506 38.971823,-87.650175 41.850385,-123.305196 48.462611)',
             srid=4326
         )
-        self.assertEqual(ref_line, City.objects.make_line())
+        # We check for equality with a tolerance of 10e-5 which is a lower bound
+        # of the precisions of ref_line coordinates
+        self.assertTrue(ref_line.equals_exact(City.objects.make_line(), tolerance=10e-5))
 
     @skipUnlessDBFeature("has_num_geom_method")
     def test_num_geom(self):
@@ -658,7 +682,7 @@ class GeoQuerySetTest(TestCase):
                 tol = 0.00001
             else:
                 tol = 0.000000001
-            self.assertEqual(True, ref[c.name].equals_exact(c.point_on_surface, tol))
+            self.assertTrue(ref[c.name].equals_exact(c.point_on_surface, tol))
 
     @skipUnlessDBFeature("has_reverse_method")
     def test_reverse_geom(self):
@@ -782,7 +806,11 @@ class GeoQuerySetTest(TestCase):
                         self.assertAlmostEqual(c1[0] + xfac, c2[0], 5)
                         self.assertAlmostEqual(c1[1] + yfac, c2[1], 5)
 
+    # TODO: Oracle can be made to pass if
+    # union1 = union2 = fromstr('POINT (-97.5211570000000023 34.4646419999999978)')
+    # but this seems unexpected and should be investigated to determine the cause.
     @skipUnlessDBFeature("has_unionagg_method")
+    @no_oracle
     def test_unionagg(self):
         "Testing the `unionagg` (aggregate union) GeoQuerySet method."
         tx = Country.objects.get(name='Texas').mpoly
@@ -797,10 +825,10 @@ class GeoQuerySetTest(TestCase):
         u1 = qs.unionagg(field_name='point')
         u2 = qs.order_by('name').unionagg()
         tol = 0.00001
-        self.assertEqual(True, union1.equals_exact(u1, tol) or union2.equals_exact(u1, tol))
-        self.assertEqual(True, union1.equals_exact(u2, tol) or union2.equals_exact(u2, tol))
+        self.assertTrue(union1.equals_exact(u1, tol) or union2.equals_exact(u1, tol))
+        self.assertTrue(union1.equals_exact(u2, tol) or union2.equals_exact(u2, tol))
         qs = City.objects.filter(name='NotACity')
-        self.assertEqual(None, qs.unionagg(field_name='point'))
+        self.assertIsNone(qs.unionagg(field_name='point'))
 
     def test_non_concrete_field(self):
         NonConcreteModel.objects.create(point=Point(0, 0), name='name')

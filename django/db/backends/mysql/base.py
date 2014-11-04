@@ -1,13 +1,15 @@
 """
 MySQL database backend for Django.
 
-Requires MySQLdb: http://sourceforge.net/projects/mysql-python
+Requires mysqlclient: https://pypi.python.org/pypi/mysqlclient/
+MySQLdb is supported for Python 2 only: http://sourceforge.net/projects/mysql-python
 """
 from __future__ import unicode_literals
 
 import datetime
 import re
 import sys
+import uuid
 import warnings
 
 try:
@@ -77,7 +79,7 @@ def adapt_datetime_with_timezone_support(value, conv):
             default_timezone = timezone.get_default_timezone()
             value = timezone.make_aware(value, default_timezone)
         value = value.astimezone(timezone.utc).replace(tzinfo=None)
-    return Thing2Literal(value.strftime("%Y-%m-%d %H:%M:%S"), conv)
+    return Thing2Literal(value.strftime("%Y-%m-%d %H:%M:%S.%f"), conv)
 
 # MySQLdb-1.2.1 returns TIME columns as timedelta -- they are more like
 # timedelta in terms of actual behavior as they are signed and include days --
@@ -173,11 +175,9 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     supports_forward_references = False
     # XXX MySQL DB-API drivers currently fail on binary data on Python 3.
     supports_binary_field = six.PY2
-    supports_microsecond_precision = False
     supports_regex_backreferencing = False
     supports_date_lookup_using_string = False
     can_introspect_binary_field = False
-    can_introspect_boolean_field = False
     can_introspect_small_integer_field = True
     supports_timezones = False
     requires_explicit_null_ordering_when_grouping = True
@@ -210,6 +210,12 @@ class DatabaseFeatures(BaseDatabaseFeatures):
         return self._mysql_storage_engine != 'MyISAM'
 
     @cached_property
+    def supports_microsecond_precision(self):
+        # See https://github.com/farcepest/MySQLdb1/issues/24 for the reason
+        # about requiring MySQLdb 1.2.5
+        return self.connection.mysql_version >= (5, 6, 4) and Database.version_info >= (1, 2, 5)
+
+    @cached_property
     def has_zoneinfo_database(self):
         # MySQL accepts full time zones names (eg. Africa/Nairobi) but rejects
         # abbreviations (eg. EAT). When pytz isn't installed and the current
@@ -223,6 +229,9 @@ class DatabaseFeatures(BaseDatabaseFeatures):
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT 1 FROM mysql.time_zone LIMIT 1")
             return cursor.fetchone() is not None
+
+    def introspected_boolean_field_type(self, *args, **kwargs):
+        return 'IntegerField'
 
 
 class DatabaseOperations(BaseDatabaseOperations):
@@ -360,8 +369,7 @@ class DatabaseOperations(BaseDatabaseOperations):
             else:
                 raise ValueError("MySQL backend does not support timezone-aware datetimes when USE_TZ is False.")
 
-        # MySQL doesn't support microseconds
-        return six.text_type(value.replace(microsecond=0))
+        return six.text_type(value)
 
     def value_to_db_time(self, value):
         if value is None:
@@ -371,13 +379,7 @@ class DatabaseOperations(BaseDatabaseOperations):
         if timezone.is_aware(value):
             raise ValueError("MySQL backend does not support timezone-aware times.")
 
-        # MySQL doesn't support microseconds
-        return six.text_type(value.replace(microsecond=0))
-
-    def year_lookup_bounds_for_datetime_field(self, value):
-        # Again, no microseconds
-        first, second = super(DatabaseOperations, self).year_lookup_bounds_for_datetime_field(value)
-        return [first.replace(microsecond=0), second.replace(microsecond=0)]
+        return six.text_type(value)
 
     def max_name_length(self):
         return 64
@@ -398,11 +400,18 @@ class DatabaseOperations(BaseDatabaseOperations):
         converters = super(DatabaseOperations, self).get_db_converters(internal_type)
         if internal_type in ['BooleanField', 'NullBooleanField']:
             converters.append(self.convert_booleanfield_value)
+        if internal_type == 'UUIDField':
+            converters.append(self.convert_uuidfield_value)
         return converters
 
     def convert_booleanfield_value(self, value, field):
         if value in (0, 1):
             value = bool(value)
+        return value
+
+    def convert_uuidfield_value(self, value, field):
+        if value is not None:
+            value = uuid.UUID(value)
         return value
 
 
@@ -426,6 +435,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     }
 
     Database = Database
+    SchemaEditorClass = DatabaseSchemaEditor
 
     def __init__(self, *args, **kwargs):
         super(DatabaseWrapper, self).__init__(*args, **kwargs)
@@ -548,10 +558,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                         % (table_name, bad_row[0],
                         table_name, column_name, bad_row[1],
                         referenced_table_name, referenced_column_name))
-
-    def schema_editor(self, *args, **kwargs):
-        "Returns a new instance of this backend's SchemaEditor"
-        return DatabaseSchemaEditor(self, *args, **kwargs)
 
     def is_usable(self):
         try:

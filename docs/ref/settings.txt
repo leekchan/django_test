@@ -18,7 +18,8 @@ Core settings
 
 Here's a list of settings available in Django core and their default values.
 Settings provided by contrib apps are listed below, followed by a topical index
-of the core settings.
+of the core settings. For introductory material, see the :doc:`settings topic
+guide </topics/settings>`.
 
 .. setting:: ABSOLUTE_URL_OVERRIDES
 
@@ -373,7 +374,7 @@ CSRF_COOKIE_NAME
 Default: ``'csrftoken'``
 
 The name of the cookie to use for the CSRF authentication token. This can be whatever you
-want.  See :doc:`/ref/contrib/csrf`.
+want.  See :doc:`/ref/csrf`.
 
 .. setting:: CSRF_COOKIE_PATH
 
@@ -414,7 +415,7 @@ is rejected by the CSRF protection.  The function should have this signature::
 
 where ``reason`` is a short message (intended for developers or logging, not for
 end users) indicating the reason the request was rejected.  See
-:doc:`/ref/contrib/csrf`.
+:doc:`/ref/csrf`.
 
 .. setting:: DATABASES
 
@@ -683,6 +684,19 @@ test database will use the name ``'test_' + DATABASE_NAME``.
 
 See :ref:`the-test-database`.
 
+.. setting:: TEST_SERIALIZE
+
+SERIALIZE
+^^^^^^^^^
+
+.. versionadded:: 1.7.1
+
+Boolean value to control whether or not the default test runner serializes the
+database into an in-memory JSON string before running tests (used to restore
+the database state between tests if you don't have transactions). You can set
+this to ``False`` to speed up creation time if you don't have any test classes
+with :ref:`serialized_rollback=True <test-case-serialized-rollback>`.
+
 .. setting:: TEST_CREATE
 
 CREATE_DB
@@ -741,7 +755,11 @@ Default: ``None``
 This is an Oracle-specific setting.
 
 The name of the tablespace that will be used when running tests. If not
-provided, Django will use ``'test_' + NAME``.
+provided, Django will use ``'test_' + USER``.
+
+.. versionchanged:: 1.8
+
+    Previously Django used ``'test_' + NAME`` if not provided.
 
 .. setting:: TEST_TBLSPACE_TMP
 
@@ -753,7 +771,73 @@ Default: ``None``
 This is an Oracle-specific setting.
 
 The name of the temporary tablespace that will be used when running tests. If
-not provided, Django will use ``'test_' + NAME + '_temp'``.
+not provided, Django will use ``'test_' + USER + '_temp'``.
+
+.. versionchanged:: 1.8
+
+    Previously Django used ``'test_' + NAME + '_temp'`` if not provided.
+
+.. setting:: DATAFILE
+
+DATAFILE
+^^^^^^^^
+
+.. versionadded:: 1.8
+
+Default: ``None``
+
+This is an Oracle-specific setting.
+
+The name of the datafile to use for the TBLSPACE. If not provided, Django will
+use ``TBLSPACE + '.dbf'``.
+
+.. setting:: DATAFILE_TMP
+
+DATAFILE_TMP
+^^^^^^^^^^^^
+
+.. versionadded:: 1.8
+
+Default: ``None``
+
+This is an Oracle-specific setting.
+
+The name of the datafile to use for the TBLSPACE_TMP. If not provided, Django
+will use ``TBLSPACE_TMP + '.dbf'``.
+
+.. setting:: DATAFILE_MAXSIZE
+
+DATAFILE_MAXSIZE
+^^^^^^^^^^^^^^^^
+
+.. versionadded:: 1.8
+
+Default: ``'500M'``
+
+.. versionchanged:: 1.8
+
+    The previous value was 200M and was not user customizable.
+
+This is an Oracle-specific setting.
+
+The maximum size that the DATAFILE is allowed to grow to.
+
+.. setting:: DATAFILE_TMP_MAXSIZE
+
+DATAFILE_TMP_MAXSIZE
+^^^^^^^^^^^^^^^^^^^^
+
+.. versionadded:: 1.8
+
+Default: ``'500M'``
+
+.. versionchanged:: 1.8
+
+    The previous value was 200M and was not user customizable.
+
+This is an Oracle-specific setting.
+
+The maximum size that the DATAFILE_TMP is allowed to grow to.
 
 .. setting:: OLD_TEST_CHARSET
 
@@ -1266,6 +1350,18 @@ connection. Please refer to the documentation of Python's
 :func:`python:ssl.wrap_socket` function for details on how the certificate chain
 file and private key file are handled.
 
+.. setting:: EMAIL_TIMEOUT
+
+EMAIL_TIMEOUT
+-------------
+
+.. versionadded:: 1.8
+
+Default: ``None``
+
+Specifies a timeout in seconds for blocking operations like the connection
+attempt.
+
 .. setting:: FILE_CHARSET
 
 FILE_CHARSET
@@ -1584,7 +1680,7 @@ standard domain cookies, existing user cookies that have the old domain
 will not be updated. This will result in site users being unable to switch
 the language as long as these cookies persist. The only safe and reliable
 option to perform the switch is to change the language cookie name
-permanently (via the :setting:`SESSION_COOKIE_NAME` setting) and to add
+permanently (via the :setting:`LANGUAGE_COOKIE_NAME` setting) and to add
 a middleware that copies the value from the old cookie to a new one and then
 deletes the old one.
 
@@ -1620,7 +1716,7 @@ setting to use a deeper path than it previously used, existing user cookies that
 have the old path will not be updated. This will result in site users being
 unable to switch the language as long as these cookies persist. The only safe
 and reliable option to perform the switch is to change the language cookie name
-permanently (via the :setting:`SESSION_COOKIE_NAME` setting), and to add
+permanently (via the :setting:`LANGUAGE_COOKIE_NAME` setting), and to add
 a middleware that copies the value from the old cookie to a new one and then
 deletes the one.
 
@@ -1907,6 +2003,29 @@ Django will refuse to start if :setting:`SECRET_KEY` is not set.
     Running Django with a known :setting:`SECRET_KEY` defeats many of Django's
     security protections, and can lead to privilege escalation and remote code
     execution vulnerabilities.
+
+The secret key is used for:
+
+* All :doc:`sessions </topics/http/sessions>` if you are using
+  any other session backend than ``django.contrib.sessions.backends.cache``,
+  or if you use
+  :class:`~django.contrib.auth.middleware.SessionAuthenticationMiddleware`
+  and are using the default
+  :meth:`~django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash()`.
+* All :doc:`messages </ref/contrib/messages>` if you are using
+  :class:`~django.contrib.messages.storage.cookie.CookieStorage` or
+  :class:`~django.contrib.messages.storage.fallback.FallbackStorage`.
+* :doc:`Form wizard </ref/contrib/formtools/form-wizard>` progress when using
+  cookie storage with
+  :class:`django.contrib.formtools.wizard.views.CookieWizardView`.
+* All :func:`~django.contrib.auth.views.password_reset` tokens.
+* All in progress :doc:`form previews </ref/contrib/formtools/form-preview>`.
+* Any usage of :doc:`cryptographic signing </topics/signing>`, unless a
+  different key is provided.
+
+If you rotate your secret key, all of the above will be invalidated.
+Secret keys are not used for passwords of users and key rotation will not
+affect them.
 
 .. setting:: SECURE_BROWSER_XSS_FILTER
 
@@ -2237,7 +2356,7 @@ TEMPLATE_STRING_IF_INVALID
 Default: ``''`` (Empty string)
 
 Output, as a string, that the template system should use for invalid (e.g.
-misspelled) variables. See :ref:`invalid-template-variables`..
+misspelled) variables. See :ref:`invalid-template-variables`.
 
 .. setting:: TEST_RUNNER
 
@@ -3089,6 +3208,7 @@ Email
 * :setting:`EMAIL_SSL_CERTFILE`
 * :setting:`EMAIL_SSL_KEYFILE`
 * :setting:`EMAIL_SUBJECT_PREFIX`
+* :setting*`EMAIL_TIMEOUT`
 * :setting:`EMAIL_USE_TLS`
 * :setting:`MANAGERS`
 * :setting:`SERVER_EMAIL`

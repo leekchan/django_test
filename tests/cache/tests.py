@@ -28,6 +28,7 @@ from django.middleware.csrf import CsrfViewMiddleware
 from django.template import Template
 from django.template.response import TemplateResponse
 from django.test import TestCase, TransactionTestCase, RequestFactory, override_settings
+from django.test.signals import setting_changed
 from django.test.utils import IgnoreDeprecationWarningsMixin
 from django.utils import six
 from django.utils import timezone
@@ -912,12 +913,9 @@ class DBCacheTests(BaseCacheTests, TransactionTestCase):
         self._perform_cull_test(caches['zero_cull'], 50, 18)
 
     def test_second_call_doesnt_crash(self):
-        stdout = six.StringIO()
-        management.call_command(
-            'createcachetable',
-            stdout=stdout
-        )
-        self.assertEqual(stdout.getvalue(),
+        out = six.StringIO()
+        management.call_command('createcachetable', stdout=out)
+        self.assertEqual(out.getvalue(),
             "Cache table 'test cache table' already exists.\n" * len(settings.CACHES))
 
     def test_createcachetable_with_table_argument(self):
@@ -926,14 +924,14 @@ class DBCacheTests(BaseCacheTests, TransactionTestCase):
         specifying the table name).
         """
         self.drop_table()
-        stdout = six.StringIO()
+        out = six.StringIO()
         management.call_command(
             'createcachetable',
             'test cache table',
             verbosity=2,
-            stdout=stdout
+            stdout=out,
         )
-        self.assertEqual(stdout.getvalue(),
+        self.assertEqual(out.getvalue(),
             "Cache table 'test cache table' created.\n")
 
     def test_clear_commits_transaction(self):
@@ -1147,8 +1145,12 @@ class FileBasedCacheTests(BaseCacheTests, TestCase):
     def setUp(self):
         super(FileBasedCacheTests, self).setUp()
         self.dirname = tempfile.mkdtemp()
+        # Caches location cannot be modified through override_settings / modify_settings,
+        # hence settings are manipulated directly here and the setting_changed signal
+        # is triggered manually.
         for cache_params in settings.CACHES.values():
             cache_params.update({'LOCATION': self.dirname})
+        setting_changed.send(self.__class__, setting='CACHES', enter=False)
 
     def tearDown(self):
         super(FileBasedCacheTests, self).tearDown()
@@ -1422,16 +1424,16 @@ class CacheUtils(TestCase):
     def test_patch_cache_control(self):
         tests = (
             # Initial Cache-Control, kwargs to patch_cache_control, expected Cache-Control parts
-            (None, {'private': True}, set(['private'])),
+            (None, {'private': True}, {'private'}),
 
             # Test whether private/public attributes are mutually exclusive
-            ('private', {'private': True}, set(['private'])),
-            ('private', {'public': True}, set(['public'])),
-            ('public', {'public': True}, set(['public'])),
-            ('public', {'private': True}, set(['private'])),
-            ('must-revalidate,max-age=60,private', {'public': True}, set(['must-revalidate', 'max-age=60', 'public'])),
-            ('must-revalidate,max-age=60,public', {'private': True}, set(['must-revalidate', 'max-age=60', 'private'])),
-            ('must-revalidate,max-age=60', {'public': True}, set(['must-revalidate', 'max-age=60', 'public'])),
+            ('private', {'private': True}, {'private'}),
+            ('private', {'public': True}, {'public'}),
+            ('public', {'public': True}, {'public'}),
+            ('public', {'private': True}, {'private'}),
+            ('must-revalidate,max-age=60,private', {'public': True}, {'must-revalidate', 'max-age=60', 'public'}),
+            ('must-revalidate,max-age=60,public', {'private': True}, {'must-revalidate', 'max-age=60', 'private'}),
+            ('must-revalidate,max-age=60', {'public': True}, {'must-revalidate', 'max-age=60', 'public'}),
         )
 
         cc_delim_re = re.compile(r'\s*,\s*')
@@ -2058,22 +2060,6 @@ class TestWithTemplateResponse(TestCase):
         self.assertTrue(response.has_header('ETag'))
 
 
-@override_settings(ROOT_URLCONF="admin_views.urls")
-class TestEtagWithAdmin(TestCase):
-    # See https://code.djangoproject.com/ticket/16003
-
-    def test_admin(self):
-        with self.settings(USE_ETAGS=False):
-            response = self.client.get('/test_admin/admin/')
-            self.assertEqual(response.status_code, 302)
-            self.assertFalse(response.has_header('ETag'))
-
-        with self.settings(USE_ETAGS=True):
-            response = self.client.get('/test_admin/admin/')
-            self.assertEqual(response.status_code, 302)
-            self.assertTrue(response.has_header('ETag'))
-
-
 class TestMakeTemplateFragmentKey(TestCase):
     def test_without_vary_on(self):
         key = make_template_fragment_key('a.fragment')
@@ -2103,7 +2089,7 @@ class CacheHandlerTest(TestCase):
         cache1 = caches['default']
         cache2 = caches['default']
 
-        self.assertTrue(cache1 is cache2)
+        self.assertIs(cache1, cache2)
 
     def test_per_thread(self):
         """
@@ -2120,4 +2106,4 @@ class CacheHandlerTest(TestCase):
             t.start()
             t.join()
 
-        self.assertFalse(c[0] is c[1])
+        self.assertIsNot(c[0], c[1])

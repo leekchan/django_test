@@ -16,6 +16,7 @@ from django.db.migrations.loader import MigrationLoader
 from django.utils import datetime_safe, six
 from django.utils.encoding import force_text
 from django.utils.functional import Promise
+from django.utils.timezone import utc
 
 
 COMPILED_REGEX_TYPE = type(re.compile(''))
@@ -154,15 +155,31 @@ class MigrationWriter(object):
         imports.discard("from django.db import models")
         items["imports"] = "\n".join(imports) + "\n" if imports else ""
         if migration_imports:
-            items["imports"] += "\n\n# Functions from the following migrations need manual copying.\n# Move them and any dependencies into this file, then update the\n# RunPython operations to refer to the local versions:\n# %s" % (
-                "\n# ".join(migration_imports)
-            )
-
+            items["imports"] += (
+                "\n\n# Functions from the following migrations need manual "
+                "copying.\n# Move them and any dependencies into this file, "
+                "then update the\n# RunPython operations to refer to the local "
+                "versions:\n# %s"
+            ) % "\n# ".join(migration_imports)
         # If there's a replaces, make a string for it
         if self.migration.replaces:
             items['replaces_str'] = "\n    replaces = %s\n" % self.serialize(self.migration.replaces)[0]
 
         return (MIGRATION_TEMPLATE % items).encode("utf8")
+
+    @staticmethod
+    def serialize_datetime(value):
+        """
+        Returns a serialized version of a datetime object that is valid,
+        executable python code. It converts timezone-aware values to utc with
+        an 'executable' utc representation of tzinfo.
+        """
+        if value.tzinfo is not None and value.tzinfo != utc:
+            value = value.astimezone(utc)
+        value_repr = repr(value).replace("<UTC>", "utc")
+        if isinstance(value, datetime_safe.datetime):
+            value_repr = "datetime.%s" % value_repr
+        return value_repr
 
     @property
     def filename(self):
@@ -207,10 +224,10 @@ class MigrationWriter(object):
     def serialize_deconstructed(cls, path, args, kwargs):
         module, name = path.rsplit(".", 1)
         if module == "django.db.models":
-            imports = set(["from django.db import models"])
+            imports = {"from django.db import models"}
             name = "models.%s" % name
         else:
-            imports = set(["import %s" % module])
+            imports = {"import %s" % module}
             name = path
         strings = []
         for arg in args:
@@ -246,6 +263,7 @@ class MigrationWriter(object):
                 imports.update(item_imports)
                 strings.append(item_string)
             if isinstance(value, set):
+                # Don't use the literal "{%s}" as it doesn't support empty set
                 format = "set([%s])"
             elif isinstance(value, tuple):
                 # When len(value)==0, the empty tuple should be serialized as
@@ -267,25 +285,24 @@ class MigrationWriter(object):
             return "{%s}" % (", ".join("%s: %s" % (k, v) for k, v in strings)), imports
         # Datetimes
         elif isinstance(value, datetime.datetime):
+            value_repr = cls.serialize_datetime(value)
+            imports = ["import datetime"]
             if value.tzinfo is not None:
-                raise ValueError("Cannot serialize datetime values with timezones. Either use a callable value for default or remove the timezone.")
-            value_repr = repr(value)
-            if isinstance(value, datetime_safe.datetime):
-                value_repr = "datetime.%s" % value_repr
-            return value_repr, set(["import datetime"])
+                imports.append("from django.utils.timezone import utc")
+            return value_repr, set(imports)
         # Dates
         elif isinstance(value, datetime.date):
             value_repr = repr(value)
             if isinstance(value, datetime_safe.date):
                 value_repr = "datetime.%s" % value_repr
-            return value_repr, set(["import datetime"])
+            return value_repr, {"import datetime"}
         # Times
         elif isinstance(value, datetime.time):
             value_repr = repr(value)
-            return value_repr, set(["import datetime"])
+            return value_repr, {"import datetime"}
         # Settings references
         elif isinstance(value, SettingsReference):
-            return "settings.%s" % value.setting_name, set(["from django.conf import settings"])
+            return "settings.%s" % value.setting_name, {"from django.conf import settings"}
         # Simple types
         elif isinstance(value, six.integer_types + (float, bool, type(None))):
             return repr(value), set()
@@ -303,7 +320,7 @@ class MigrationWriter(object):
             return value_repr, set()
         # Decimal
         elif isinstance(value, decimal.Decimal):
-            return repr(value), set(["from decimal import Decimal"])
+            return repr(value), {"from decimal import Decimal"}
         # Django fields
         elif isinstance(value, models.Field):
             attr_name, path, args, kwargs = value.deconstruct()
@@ -317,7 +334,7 @@ class MigrationWriter(object):
             if getattr(value, "__self__", None) and isinstance(value.__self__, type):
                 klass = value.__self__
                 module = klass.__module__
-                return "%s.%s.%s" % (module, klass.__name__, value.__name__), set(["import %s" % module])
+                return "%s.%s.%s" % (module, klass.__name__, value.__name__), {"import %s" % module}
             # Further error checking
             if value.__name__ == '<lambda>':
                 raise ValueError("Cannot serialize function: lambda")
@@ -326,7 +343,7 @@ class MigrationWriter(object):
             # Python 3 is a lot easier, and only uses this branch if it's not local.
             if getattr(value, "__qualname__", None) and getattr(value, "__module__", None):
                 if "<" not in value.__qualname__:  # Qualname can include <locals>
-                    return "%s.%s" % (value.__module__, value.__qualname__), set(["import %s" % value.__module__])
+                    return "%s.%s" % (value.__module__, value.__qualname__), {"import %s" % value.__module__}
             # Python 2/fallback version
             module_name = value.__module__
             # Make sure it's actually there and not an unbound method
@@ -341,7 +358,7 @@ class MigrationWriter(object):
                     "For more information, see "
                     "https://docs.djangoproject.com/en/dev/topics/migrations/#serializing-values"
                     % (value.__name__, module_name))
-            return "%s.%s" % (module_name, value.__name__), set(["import %s" % module_name])
+            return "%s.%s" % (module_name, value.__name__), {"import %s" % module_name}
         # Classes
         elif isinstance(value, type):
             special_cases = [
@@ -352,7 +369,10 @@ class MigrationWriter(object):
                     return string, set(imports)
             if hasattr(value, "__module__"):
                 module = value.__module__
-                return "%s.%s" % (module, value.__name__), set(["import %s" % module])
+                if module == six.moves.builtins.__name__:
+                    return value.__name__, set()
+                else:
+                    return "%s.%s" % (module, value.__name__), {"import %s" % module}
         # Other iterables
         elif isinstance(value, collections.Iterable):
             imports = set()
@@ -367,7 +387,7 @@ class MigrationWriter(object):
             return format % (", ".join(strings)), imports
         # Compiled regex
         elif isinstance(value, COMPILED_REGEX_TYPE):
-            imports = set(["import re"])
+            imports = {"import re"}
             regex_pattern, pattern_imports = cls.serialize(value.pattern)
             regex_flags, flag_imports = cls.serialize(value.flags)
             imports.update(pattern_imports)
@@ -378,7 +398,11 @@ class MigrationWriter(object):
             return "re.compile(%s)" % ', '.join(args), imports
         # Uh oh.
         else:
-            raise ValueError("Cannot serialize: %r\nThere are some values Django cannot serialize into migration files.\nFor more, see https://docs.djangoproject.com/en/dev/topics/migrations/#migration-serializing" % value)
+            raise ValueError(
+                "Cannot serialize: %r\nThere are some values Django cannot serialize into "
+                "migration files.\nFor more, see https://docs.djangoproject.com/en/dev/"
+                "topics/migrations/#migration-serializing" % value
+            )
 
 
 MIGRATION_TEMPLATE = """\

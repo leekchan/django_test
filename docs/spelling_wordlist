@@ -57,6 +57,7 @@ Biggs
 Bjørn
 blocktrans
 blog
+blogs
 Boersma
 boilerplatish
 Bokmål
@@ -133,6 +134,7 @@ datatype
 datetimes
 dbshell
 de
+Debian
 deconstruct
 deconstructing
 deepcopy
@@ -330,6 +332,7 @@ Kyngesburye
 latin
 lawrence
 Lawrence
+Leidel
 lexer
 lhs
 lifecycle
@@ -352,9 +355,11 @@ Loïc
 lorem
 lt
 lte
+Luhn
 Magee
 makemessages
 makemigrations
+Mako
 Mapnik
 MBR
 memcache
@@ -380,6 +385,7 @@ modelformset
 modwsgi
 monkeypatched
 Montréal
+mssql
 multijoins
 multiline
 multipart
@@ -391,6 +397,7 @@ myapp
 myproject
 mysite
 mysql
+mysqlclient
 naïve
 namespace
 namespaced
@@ -467,6 +474,7 @@ prepopulate
 prepopulated
 prepopulates
 preprocess
+Procida
 programmatically
 projectname
 proxied
@@ -575,6 +583,8 @@ squashmigrations
 ssi
 SSL
 stacktrace
+startapp
+startproject
 startswith
 stateful
 staticfile

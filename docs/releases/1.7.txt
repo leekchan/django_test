@@ -65,7 +65,9 @@ but a few of the key features are:
   it as soon as possible (nothing more than renaming is required).
 
 * ``initial_data`` fixtures are no longer loaded for apps with migrations; if
-  you want to load initial data for an app, we suggest you do it in a migration.
+  you want to load initial data for an app, we suggest you create a migration for
+  your application and define a :class:`~django.db.migrations.operations.RunPython`
+  or :class:`~django.db.migrations.operations.RunSQL` operation in the ``operations`` section of the migration.
 
 * Test rollback behavior is different for apps with migrations; in particular,
   Django will no longer emulate rollbacks on non-transactional databases or
@@ -567,7 +569,7 @@ Email
 * :func:`~django.core.mail.send_mail` now accepts an ``html_message``
   parameter for sending a multipart ``text/plain`` and ``text/html`` email.
 * The SMTP :class:`~django.core.mail.backends.smtp.EmailBackend` now accepts a
-  :attr:`~django.core.mail.backends.smtp.EmailBackend.timeout` parameter.
+  ``timeout`` parameter.
 
 File Storage
 ^^^^^^^^^^^^
@@ -1021,7 +1023,7 @@ script with::
 Otherwise, you will hit an ``AppRegistryNotReady`` exception.
 
 WSGI scripts
-~~~~~~~~~~~~
+^^^^^^^^^^^^
 
 Until Django 1.3, the recommended way to create a WSGI application was::
 

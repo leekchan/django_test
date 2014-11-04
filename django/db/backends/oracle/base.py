@@ -10,6 +10,7 @@ import decimal
 import re
 import platform
 import sys
+import uuid
 import warnings
 
 
@@ -123,6 +124,21 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     uppercases_column_names = True
     # select for update with limit can be achieved on Oracle, but not with the current backend.
     supports_select_for_update_with_limit = False
+
+    def introspected_boolean_field_type(self, field=None, created_separately=False):
+        """
+        Some versions of Oracle -- we've seen this on 11.2.0.1 and suspect
+        it goes back -- have a weird bug where, when an integer column is
+        added to an existing table with a default, its precision is later
+        reported on introspection as 0, regardless of the real precision.
+        For Django introspection, this means that such columns are reported
+        as IntegerField even if they are really BigIntegerField or BooleanField.
+
+        The bug is solved in Oracle 11.2.0.2 and up.
+        """
+        if self.connection.oracle_full_version < '11.2.0.2' and field and field.has_default() and created_separately:
+            return 'IntegerField'
+        return super(DatabaseFeatures, self).introspected_boolean_field_type(field, created_separately)
 
 
 class DatabaseOperations(BaseDatabaseOperations):
@@ -264,6 +280,8 @@ WHEN (new.%(col_name)s IS NULL)
             converters.append(self.convert_datefield_value)
         elif internal_type == 'TimeField':
             converters.append(self.convert_timefield_value)
+        elif internal_type == 'UUIDField':
+            converters.append(self.convert_uuidfield_value)
         converters.append(self.convert_empty_values)
         return converters
 
@@ -308,6 +326,11 @@ WHEN (new.%(col_name)s IS NULL)
     def convert_timefield_value(self, value, field):
         if isinstance(value, Database.Timestamp):
             value = value.time()
+        return value
+
+    def convert_uuidfield_value(self, value, field):
+        if value is not None:
+            value = uuid.UUID(value)
         return value
 
     def deferrable_sql(self):
@@ -585,6 +608,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     })
 
     Database = Database
+    SchemaEditorClass = DatabaseSchemaEditor
 
     def __init__(self, *args, **kwargs):
         super(DatabaseWrapper, self).__init__(*args, **kwargs)
@@ -685,10 +709,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                     six.reraise(utils.IntegrityError, utils.IntegrityError(*tuple(e.args)), sys.exc_info()[2])
                 raise
 
-    def schema_editor(self, *args, **kwargs):
-        "Returns a new instance of this backend's SchemaEditor"
-        return DatabaseSchemaEditor(self, *args, **kwargs)
-
     # Oracle doesn't support releasing savepoints. But we fake them when query
     # logging is enabled to keep query counts consistent with other backends.
     def _savepoint_commit(self, sid):
@@ -729,20 +749,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
             return int(self.oracle_full_version.split('.')[0])
         except ValueError:
             return None
-
-    @cached_property
-    def version_has_default_introspection_bug(self):
-        """
-        Some versions of Oracle -- we've seen this on 11.2.0.1 and suspect
-        it goes back -- have a weird bug where, when an integer column is
-        defined with a default, its precision is later reported on introspection
-        as 0, regardless of the real precision. For Django introspection, this
-        means that such columns are reported as IntegerField even if they are
-        really BigIntegerField or BooleanField.
-
-        The bug is solved in Oracle 11.2.0.2 and up.
-        """
-        return self.oracle_full_version < '11.2.0.2'
 
 
 class OracleParam(object):

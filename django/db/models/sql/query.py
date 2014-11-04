@@ -574,7 +574,7 @@ class Query(object):
             return
         orig_opts = self.get_meta()
         seen = {}
-        must_include = {orig_opts.concrete_model: set([orig_opts.pk])}
+        must_include = {orig_opts.concrete_model: {orig_opts.pk}}
         for field_name in field_names:
             parts = field_name.split(LOOKUP_SEP)
             cur_model = self.model._meta.concrete_model
@@ -1094,39 +1094,37 @@ class Query(object):
         Checks the type of object passed to query relations.
         """
         if field.rel:
-            # testing for iterable of models
-            if hasattr(value, '__iter__'):
-                # Check if the iterable has a model attribute, if so
-                # it is likely something like a QuerySet.
-                if hasattr(value, 'model') and hasattr(value.model, '_meta'):
-                    model = value.model
-                    if not (model == opts.concrete_model
-                            or opts.concrete_model in model._meta.get_parent_list()
-                            or model in opts.get_parent_list()):
-                        raise ValueError(
-                            'Cannot use QuerySet for "%s": Use a QuerySet for "%s".' %
-                            (model._meta.model_name, opts.object_name))
-                else:
-                    for v in value:
-                        self.check_query_object_type(v, opts)
-            else:
-                # expecting single model instance here
+            # QuerySets implement is_compatible_query_object_type() to
+            # determine compatibility with the given field.
+            if hasattr(value, 'is_compatible_query_object_type'):
+                if not value.is_compatible_query_object_type(opts):
+                    raise ValueError(
+                        'Cannot use QuerySet for "%s": Use a QuerySet for "%s".' %
+                        (value.model._meta.model_name, opts.object_name)
+                    )
+            elif hasattr(value, '_meta'):
                 self.check_query_object_type(value, opts)
+            elif hasattr(value, '__iter__'):
+                for v in value:
+                    self.check_query_object_type(v, opts)
 
     def build_lookup(self, lookups, lhs, rhs):
         lookups = lookups[:]
+        bilaterals = []
         while lookups:
             lookup = lookups[0]
             if len(lookups) == 1:
                 final_lookup = lhs.get_lookup(lookup)
                 if final_lookup:
-                    return final_lookup(lhs, rhs)
+                    return final_lookup(lhs, rhs, bilaterals)
                 # We didn't find a lookup, so we are going to try get_transform
                 # + get_lookup('exact').
                 lookups.append('exact')
             next = lhs.get_transform(lookup)
             if next:
                 lhs = next(lhs, lookups)
+                if getattr(next, 'bilateral', False):
+                    bilaterals.append((next, lookups))
             else:
                 raise FieldError(
                     "Unsupported lookup '%s' for %s or join on the field not "
@@ -1370,9 +1368,13 @@ class Query(object):
             try:
                 field, model, direct, m2m = opts.get_field_by_name(name)
             except FieldDoesNotExist:
-                # We didn't found the current field, so move position back
+                # We didn't find the current field, so move position back
                 # one step.
                 pos -= 1
+                if pos == -1 or fail_on_missing:
+                    available = opts.get_all_field_names() + list(self.aggregate_select)
+                    raise FieldError("Cannot resolve keyword %r into field. "
+                                     "Choices are: %s" % (name, ", ".join(available)))
                 break
             # Check if we need any joins for concrete inheritance cases (the
             # field lives in parent, but we are currently in one of its
@@ -1412,15 +1414,12 @@ class Query(object):
                 # Local non-relational field.
                 final_field = field
                 targets = (field,)
+                if fail_on_missing and pos + 1 != len(names):
+                    raise FieldError(
+                        "Cannot resolve keyword %r into field. Join on '%s'"
+                        " not permitted." % (names[pos + 1], name))
                 break
-        if pos == -1 or (fail_on_missing and pos + 1 != len(names)):
-            self.raise_field_error(opts, name)
         return path, final_field, targets, names[pos + 1:]
-
-    def raise_field_error(self, opts, name):
-        available = opts.get_all_field_names() + list(self.aggregate_select)
-        raise FieldError("Cannot resolve keyword %r into field. "
-                         "Choices are: %s" % (name, ", ".join(available)))
 
     def setup_joins(self, names, opts, alias, can_reuse=None, allow_many=True):
         """
@@ -1774,7 +1773,8 @@ class Query(object):
                 entry_params = []
                 pos = entry.find("%s")
                 while pos != -1:
-                    entry_params.append(next(param_iter))
+                    if pos == 0 or entry[pos - 1] != '%':
+                        entry_params.append(next(param_iter))
                     pos = entry.find("%s", pos + 2)
                 select_pairs[name] = (entry, entry_params)
             # This is order preserving, since self.extra_select is an OrderedDict.
@@ -2022,7 +2022,7 @@ def add_to_dict(data, key, value):
     if key in data:
         data[key].add(value)
     else:
-        data[key] = set([value])
+        data[key] = {value}
 
 
 def is_reverse_o2o(field):

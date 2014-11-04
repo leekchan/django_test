@@ -392,7 +392,7 @@ class SequenceResetTest(TestCase):
         # If we create a new object now, it should have a PK greater
         # than the PK we specified manually.
         obj = models.Post.objects.create(name='New post', text='goodbye world')
-        self.assertTrue(obj.pk > 10)
+        self.assertGreater(obj.pk, 10)
 
 
 # This test needs to run outside of a transaction, otherwise closing the
@@ -413,12 +413,12 @@ class ConnectionCreatedSignalTest(TransactionTestCase):
         connection_created.connect(receiver)
         connection.close()
         connection.cursor()
-        self.assertTrue(data["connection"].connection is connection.connection)
+        self.assertIs(data["connection"].connection, connection.connection)
 
         connection_created.disconnect(receiver)
         data.clear()
         connection.cursor()
-        self.assertTrue(data == {})
+        self.assertEqual(data, {})
 
 
 class EscapingChecks(TestCase):
@@ -570,6 +570,14 @@ class BackendTestCase(TestCase):
         self.assertTrue(hasattr(connection, 'ops'))
         self.assertTrue(hasattr(connection.ops, 'connection'))
         self.assertEqual(connection, connection.ops.connection)
+
+    def test_database_operations_init(self):
+        """
+        Test that DatabaseOperations initialization doesn't query the database.
+        See #17656.
+        """
+        with self.assertNumQueries(0):
+            connection.ops.__class__(connection)
 
     def test_cached_db_features(self):
         self.assertIn(connection.features.supports_transactions, (True, False))
@@ -973,7 +981,7 @@ class DBConstraintTestCase(TransactionTestCase):
 
     available_apps = ['backends']
 
-    def test_can_reference_existant(self):
+    def test_can_reference_existent(self):
         obj = models.Object.objects.create()
         ref = models.ObjectReference.objects.create(obj=obj)
         self.assertEqual(ref.obj, obj)
@@ -981,7 +989,7 @@ class DBConstraintTestCase(TransactionTestCase):
         ref = models.ObjectReference.objects.get(obj=obj)
         self.assertEqual(ref.obj, obj)
 
-    def test_can_reference_non_existant(self):
+    def test_can_reference_non_existent(self):
         self.assertFalse(models.Object.objects.filter(id=12345).exists())
         ref = models.ObjectReference.objects.create(obj_id=12345)
         ref_new = models.ObjectReference.objects.get(obj_id=12345)
