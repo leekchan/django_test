@@ -7,7 +7,7 @@ install:
     - pip install coveralls
 
 script:
-    - cd django-repo/tests
+    - cd tests
     - PYTHONPATH=..:$PYTHONPATH ./runtests.py
     
 after_success:
